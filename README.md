@@ -90,3 +90,8 @@ TrueStub started as a personalized fork of [SafeTrust](https://github.com/safetr
 ---
 
 🌟 **Join TrueStub today and never wire money to a stranger for a ticket again!** 🌟
+
+## Handsoff notes
+
+<!-- handsoff-issue-305 -->
+- #305: Add tests for the `transfers.ts` route (HTTP layer)
