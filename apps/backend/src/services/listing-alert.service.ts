@@ -165,6 +165,43 @@ export class ListingAlertService {
     return result;
   }
 
+  /**
+   * Backend job: compare each watched listing's current price against the
+   * price recorded at watch-time and notify the watcher on any change.
+   *
+   * `fetchListing` resolves the current snapshot for a listing id (e.g. from
+   * the listings table). Watches without a recorded price are skipped, since
+   * there is no baseline to compare against. Returns the notified user ids.
+   */
+  async detectWatchlistPriceChanges(
+    fetchListing: (listingId: string) => Promise<ListingSnapshot | undefined>
+  ): Promise<string[]> {
+    const notified: string[] = [];
+    const seen = new Set<string>();
+
+    for (const w of this.watches.values()) {
+      if (w.price === undefined) continue;
+      const key = `${w.userId}:${w.listingId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const listing = await fetchListing(w.listingId);
+      if (!listing || listing.price === w.price) continue;
+
+      const direction = listing.price < w.price ? "dropped" : "increased";
+      await this.deliver(
+        w,
+        "watchlist_price_change",
+        `💸 Price ${direction}: ${listing.eventName}`,
+        `The price of a listing you're watching ${direction} from ${w.price} to ${listing.price} USDC.`,
+        `${ListingAlertService.baseUrl()}/rent/${listing.id}`
+      );
+      notified.push(w.userId);
+    }
+
+    return notified;
+  }
+
   private async deliver(
     target: { userId: string; email?: string; pushToken?: string },
     type: string,

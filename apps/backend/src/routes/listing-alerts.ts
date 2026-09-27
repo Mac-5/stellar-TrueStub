@@ -7,6 +7,7 @@
  *   POST   /api/watchlist                watch a listing
  *   GET    /api/watchlist?userId=
  *   DELETE /api/watchlist/:listingId?userId=
+ *   POST   /api/watchlist/price-check    run the watchlist price-change job (#334)
  */
 
 import { Router } from "express";
@@ -32,6 +33,11 @@ const watchSchema = z.object({
   price: z.number().nonnegative().optional(),
   email: z.string().email().optional(),
   pushToken: z.string().optional(),
+});
+
+const priceCheckSchema = z.object({
+  listingId: z.string().min(1),
+  currentPrice: z.number().nonnegative(),
 });
 
 const userIdOf = (q: unknown) => (typeof q === "string" && q ? q : undefined);
@@ -78,4 +84,20 @@ watchlistRouter.delete("/:listingId", (req, res) => {
   return listingAlertService.unwatch(userId, req.params.listingId)
     ? res.status(204).end()
     : res.status(404).json({ error: "Not on watchlist" });
+});
+
+/**
+ * Watchlist price-change job (#334).
+ *
+ * Compares a watched listing's current price against the price recorded at
+ * watch-time and notifies every watcher whose saved price differs. Intended to
+ * be invoked by the backend scheduler whenever a listing's price is updated.
+ */
+watchlistRouter.post("/price-check", (req, res) => {
+  const parsed = priceCheckSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid price check payload", details: parsed.error.flatten() });
+  }
+  const notifications = listingAlertService.checkPriceChange(parsed.data.listingId, parsed.data.currentPrice);
+  return res.json({ notifications });
 });
