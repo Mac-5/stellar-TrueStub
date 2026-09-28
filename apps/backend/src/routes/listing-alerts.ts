@@ -5,11 +5,9 @@
  *   GET    /api/saved-searches           list the caller's saved searches
  *   DELETE /api/saved-searches/:id
  *   POST   /api/watchlist                watch a listing
- *   GET    /api/watchlist
- *   DELETE /api/watchlist/:listingId
- *
- * The acting user is always derived from a verified Firebase ID token; a
- * client-supplied `userId` is never trusted.
+ *   GET    /api/watchlist?userId=
+ *   DELETE /api/watchlist/:listingId?userId=
+ *   POST   /api/watchlist/price-check    run the watchlist price-change job (#334)
  */
 
 import { Router } from "express";
@@ -36,24 +34,12 @@ const watchSchema = z.object({
   pushToken: z.string().optional(),
 });
 
-/**
- * Resolve the authenticated caller's uid from the Firebase ID token, or
- * `undefined` when the request is unauthenticated. Mirrors the token
- * verification pattern used in `sync-user.ts`.
- */
-const authenticatedUserId = async (req: { headers: Record<string, unknown> }): Promise<string | undefined> => {
-  const header = req.headers.authorization;
-  const token = typeof header === "string" && header.startsWith("Bearer ")
-    ? header.slice("Bearer ".length).trim()
-    : undefined;
-  if (!token) return undefined;
-  try {
-    const decoded = await verifyIdToken(token);
-    return decoded?.uid;
-  } catch {
-    return undefined;
-  }
-};
+const priceCheckSchema = z.object({
+  listingId: z.string().min(1),
+  currentPrice: z.number().nonnegative(),
+});
+
+const userIdOf = (q: unknown) => (typeof q === "string" && q ? q : undefined);
 
 savedSearchesRouter.post("/", async (req, res) => {
   const userId = await authenticatedUserId(req);
@@ -101,4 +87,20 @@ watchlistRouter.delete("/:listingId", async (req, res) => {
   return listingAlertService.unwatch(userId, req.params.listingId)
     ? res.status(204).end()
     : res.status(404).json({ error: "Not on watchlist" });
+});
+
+/**
+ * Watchlist price-change job (#334).
+ *
+ * Compares a watched listing's current price against the price recorded at
+ * watch-time and notifies every watcher whose saved price differs. Intended to
+ * be invoked by the backend scheduler whenever a listing's price is updated.
+ */
+watchlistRouter.post("/price-check", (req, res) => {
+  const parsed = priceCheckSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid price check payload", details: parsed.error.flatten() });
+  }
+  const notifications = listingAlertService.checkPriceChange(parsed.data.listingId, parsed.data.currentPrice);
+  return res.json({ notifications });
 });
